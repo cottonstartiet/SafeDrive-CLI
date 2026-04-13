@@ -49,7 +49,7 @@ export function FileBrowser({
   progress,
 }: FileBrowserProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [previewFile, setPreviewFile] = useState<{ path: string; name: string } | null>(null);
+  const [previewIndex, setPreviewIndex] = useState<number>(-1);
 
   const sortedFiles = useMemo(() => {
     return [...files].sort((a, b) => {
@@ -58,8 +58,13 @@ export function FileBrowser({
     });
   }, [files]);
 
+  const imageFiles = useMemo(() => {
+    return sortedFiles
+      .filter((f) => !f.is_dir && isImageFile(f.name))
+      .map((f) => ({ path: f.path, name: f.name }));
+  }, [sortedFiles]);
+
   const fileCount = files.filter((f) => !f.is_dir).length;
-  const dirCount = files.filter((f) => f.is_dir).length;
 
   const toggleSelect = (path: string) => {
     setSelected((prev) => {
@@ -84,17 +89,19 @@ export function FileBrowser({
     onExtractSelected(Array.from(selected));
   };
 
+  const openPreview = (filePath: string) => {
+    const idx = imageFiles.findIndex((f) => f.path === filePath);
+    if (idx >= 0) setPreviewIndex(idx);
+  };
+
   return (
     <>
-    <Card>
+    <Card className="h-full flex flex-col">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="text-base flex items-center gap-2">
             <FolderOpen className="h-4 w-4" />
-            Files
-            <span className="text-xs text-muted-foreground font-normal">
-              {fileCount} files, {dirCount} folders
-            </span>
+            Volume Contents
           </CardTitle>
           <div className="flex gap-2">
             <Button
@@ -126,12 +133,12 @@ export function FileBrowser({
           </div>
         </div>
       </CardHeader>
-      <CardContent className="pt-0">
+      <CardContent className="pt-0 flex-1 min-h-0 flex flex-col">
         {isExtracting && (
           <div className="mb-3 space-y-1">
             <Progress value={progress * 100} className="h-2" />
             <p className="text-xs text-muted-foreground">
-              Extracting... {Math.round(progress * 100)}%
+              Extracting… {Math.round(progress * 100)}%
             </p>
           </div>
         )}
@@ -141,7 +148,7 @@ export function FileBrowser({
             No files found in volume, or filesystem not supported.
           </p>
         ) : (
-          <ScrollArea className="h-[280px] rounded-md border">
+          <ScrollArea className="flex-1 rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -192,7 +199,7 @@ export function FileBrowser({
                           title="Preview image"
                           onClick={(e) => {
                             e.stopPropagation();
-                            setPreviewFile({ path: file.path, name: file.name });
+                            openPreview(file.path);
                           }}
                         >
                           <Eye className="h-3.5 w-3.5" />
@@ -209,10 +216,11 @@ export function FileBrowser({
     </Card>
 
     <ImagePreviewModal
-      open={previewFile !== null}
-      onOpenChange={(open) => { if (!open) setPreviewFile(null); }}
-      volumePath={previewFile?.path ?? null}
-      fileName={previewFile?.name ?? ""}
+      open={previewIndex >= 0}
+      onOpenChange={(open) => { if (!open) setPreviewIndex(-1); }}
+      imageFiles={imageFiles}
+      currentIndex={previewIndex >= 0 ? previewIndex : 0}
+      onNavigate={setPreviewIndex}
     />
     </>
   );

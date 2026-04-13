@@ -2,14 +2,15 @@ import { useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
-import { Home } from "@/components/Home";
-import { VolumeInfoPanel } from "@/components/VolumeInfoPanel";
-import { FileBrowser } from "@/components/FileBrowser";
-import { MountPanel } from "@/components/MountPanel";
+import { Landing, type RecentDrive } from "@/components/Landing";
+import { UnlockView } from "@/components/UnlockView";
+import { VolumeView } from "@/components/VolumeView";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
+import { Shield, ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
-export type AppStep = "idle" | "file_selected" | "unlocking" | "unlocked" | "mounting" | "mounted";
+export type AppStep = "landing" | "file_selected" | "unlocking" | "unlocked" | "mounting" | "mounted";
 
 export interface VolumeInfo {
   encryption: string;
@@ -29,8 +30,42 @@ export interface FileEntry {
   is_dir: boolean;
 }
 
+const RECENT_DRIVES_KEY = "safedrive_recent_drives";
+const MAX_RECENT = 10;
+
+function loadRecentDrives(): RecentDrive[] {
+  try {
+    const raw = localStorage.getItem(RECENT_DRIVES_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+function saveRecentDrives(drives: RecentDrive[]) {
+  localStorage.setItem(RECENT_DRIVES_KEY, JSON.stringify(drives));
+}
+
+function addRecentDrive(path: string, drives: RecentDrive[]): RecentDrive[] {
+  const name = path.split("\\").pop() || path;
+  const filtered = drives.filter((d) => d.path !== path);
+  const updated = [
+    { path, name, lastOpened: new Date().toISOString() },
+    ...filtered,
+  ].slice(0, MAX_RECENT);
+  saveRecentDrives(updated);
+  return updated;
+}
+
+function removeRecentDrive(path: string, drives: RecentDrive[]): RecentDrive[] {
+  const updated = drives.filter((d) => d.path !== path);
+  saveRecentDrives(updated);
+  return updated;
+}
+
 function App() {
-  const [step, setStep] = useState<AppStep>("idle");
+  const [step, setStep] = useState<AppStep>("landing");
   const [filePath, setFilePath] = useState<string>("");
   const [volumeInfo, setVolumeInfo] = useState<VolumeInfo | null>(null);
   const [fsType, setFsType] = useState<string>("");
@@ -42,7 +77,9 @@ function App() {
   const [isUnmounting, setIsUnmounting] = useState(false);
   const [mountProgress, setMountProgress] = useState<number>(0);
   const [mountStage, setMountStage] = useState<string>("");
+  const [recentDrives, setRecentDrives] = useState<RecentDrive[]>(loadRecentDrives);
 
+  // Open file dialog
   const handleSelectFile = useCallback(async () => {
     const selected = await openDialog({
       multiple: false,
@@ -57,11 +94,27 @@ function App() {
     }
   }, []);
 
+  // File dropped
   const handleFileDrop = useCallback((path: string) => {
     setFilePath(path);
     setStep("file_selected");
   }, []);
 
+  // Open from recent list
+  const handleOpenRecent = useCallback((path: string) => {
+    setFilePath(path);
+    setStep("file_selected");
+  }, []);
+
+  // Remove from recent
+  const handleRemoveRecent = useCallback(
+    (path: string) => {
+      setRecentDrives((prev) => removeRecentDrive(path, prev));
+    },
+    []
+  );
+
+  // Unlock volume
   const handleUnlock = useCallback(
     async (password: string) => {
       setStep("unlocking");
@@ -84,6 +137,9 @@ function App() {
           setFiles([]);
         }
 
+        // Add to recent drives
+        setRecentDrives((prev) => addRecentDrive(filePath, prev));
+
         setStep("unlocked");
       } catch (e) {
         setStep("file_selected");
@@ -95,6 +151,7 @@ function App() {
     [filePath]
   );
 
+  // Extract all files
   const handleExtractAll = useCallback(async () => {
     const dest = await openDialog({
       directory: true,
@@ -121,6 +178,7 @@ function App() {
     }
   }, []);
 
+  // Extract selected files
   const handleExtractSelected = useCallback(async (paths: string[]) => {
     const dest = await openDialog({
       directory: true,
@@ -150,6 +208,7 @@ function App() {
     }
   }, []);
 
+  // Mount volume
   const handleMount = useCallback(async () => {
     setIsMounting(true);
     setMountProgress(0);
@@ -186,6 +245,7 @@ function App() {
     }
   }, []);
 
+  // Unmount volume
   const handleUnmount = useCallback(async () => {
     setIsUnmounting(true);
 
@@ -201,13 +261,14 @@ function App() {
     }
   }, []);
 
+  // Close volume and go back
   const handleClose = useCallback(async () => {
     try {
       await invoke("close_volume");
     } catch {
       // Ignore errors on close
     }
-    setStep("idle");
+    setStep("landing");
     setFilePath("");
     setVolumeInfo(null);
     setFsType("");
@@ -219,67 +280,87 @@ function App() {
     setMountStage("");
   }, []);
 
+  // Go back to landing (without close, for pre-unlock steps)
+  const handleBack = useCallback(() => {
+    setStep("landing");
+    setFilePath("");
+  }, []);
+
+  const isVolumeOpen =
+    step === "unlocked" || step === "mounted" || step === "mounting";
+
   return (
     <div className="min-h-screen bg-background">
-      <div className="border-b px-6 py-3 flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-foreground">TC Drive</h1>
-        {step !== "idle" && (
+      {/* Header */}
+      <div className="border-b px-5 py-3 flex items-center justify-between bg-card">
+        <div className="flex items-center gap-2.5">
+          {isVolumeOpen && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 mr-1"
+              onClick={handleClose}
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          )}
+          <Shield className="h-5 w-5 text-primary" />
+          <h1 className="text-base font-semibold text-foreground tracking-tight">
+            SafeDrive
+          </h1>
+        </div>
+        {isVolumeOpen && (
           <button
             onClick={handleClose}
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             Close Volume
           </button>
         )}
       </div>
 
-      <div className="mx-auto max-w-4xl p-6 space-y-4">
-        {(step === "idle" || step === "file_selected") && (
-          <Home
-            filePath={filePath}
-            onSelectFile={handleSelectFile}
-            onFileDrop={handleFileDrop}
-            onUnlock={step === "file_selected" ? handleUnlock : undefined}
-          />
-        )}
+      {/* Content */}
+      {step === "landing" && (
+        <Landing
+          recentDrives={recentDrives}
+          onOpenDrive={handleSelectFile}
+          onOpenRecent={handleOpenRecent}
+          onRemoveRecent={handleRemoveRecent}
+          onFileDrop={handleFileDrop}
+        />
+      )}
 
-        {step === "unlocking" && (
-          <div className="flex items-center justify-center py-20">
-            <div className="text-center space-y-3">
-              <div className="animate-spin h-8 w-8 border-2 border-primary border-t-transparent rounded-full mx-auto" />
-              <p className="text-muted-foreground">Decrypting volume header...</p>
-              <p className="text-xs text-muted-foreground">
-                Trying all encryption combinations
-              </p>
-            </div>
-          </div>
-        )}
+      {(step === "file_selected" || step === "unlocking") && (
+        <UnlockView
+          filePath={filePath}
+          onBack={handleBack}
+          onSelectFile={handleSelectFile}
+          onUnlock={handleUnlock}
+          isUnlocking={step === "unlocking"}
+          onFileDrop={handleFileDrop}
+        />
+      )}
 
-        {(step === "unlocked" || step === "mounted" || step === "mounting") && volumeInfo && (
-          <>
-            <VolumeInfoPanel info={volumeInfo} fsType={fsType} filePath={filePath} />
-
-            <FileBrowser
-              files={files}
-              onExtractAll={handleExtractAll}
-              onExtractSelected={handleExtractSelected}
-              isExtracting={isExtracting}
-              progress={extractProgress}
-            />
-
-            <MountPanel
-              isMounted={step === "mounted"}
-              isMounting={isMounting}
-              isUnmounting={isUnmounting}
-              mountProgress={mountProgress}
-              mountStage={mountStage}
-              driveLetter={driveLetter}
-              onMount={handleMount}
-              onUnmount={handleUnmount}
-            />
-          </>
-        )}
-      </div>
+      {isVolumeOpen && volumeInfo && (
+        <VolumeView
+          volumeInfo={volumeInfo}
+          fsType={fsType}
+          filePath={filePath}
+          files={files}
+          onExtractAll={handleExtractAll}
+          onExtractSelected={handleExtractSelected}
+          isExtracting={isExtracting}
+          extractProgress={extractProgress}
+          isMounted={step === "mounted"}
+          isMounting={isMounting}
+          isUnmounting={isUnmounting}
+          mountProgress={mountProgress}
+          mountStage={mountStage}
+          driveLetter={driveLetter}
+          onMount={handleMount}
+          onUnmount={handleUnmount}
+        />
+      )}
 
       <Toaster position="bottom-right" />
     </div>
